@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -60,7 +61,7 @@ func getConfigFilePath() (string, error) {
  */
 func (c Config) SetUser(name string) error {
 	c.CurrentUserName = name
-    // slog.Info("SetUser()", "DbUrl", c.DbUrl, "CurrentUserName", c.CurrentUserName)
+	// slog.Info("SetUser()", "DbUrl", c.DbUrl, "CurrentUserName", c.CurrentUserName)
 
 	err := write(c)
 	if err != nil {
@@ -72,22 +73,35 @@ func (c Config) SetUser(name string) error {
 func write(cfg Config) error {
 	jsonPath, err := getConfigFilePath()
 	if err != nil {
-		return  fmt.Errorf("failed to getConfigFilePath: %w\n", err)
+		return fmt.Errorf("failed to getConfigFilePath: %w\n", err)
 	}
 
-    // slog.Info("write()", "openfile", jsonPath)
-	file, err := os.OpenFile(jsonPath, os.O_RDWR, 0644)
+	// slog.Info("write()", "openfile", jsonPath)
+	// file, err := os.OpenFile(jsonPath, os.O_RDWR, 0644)
+	// if err != nil {
+	// 	return fmt.Errorf("failed to read file: %w\n", err)
+	// }
+	// defer file.Close()
+
+	// encoder := json.NewEncoder(file)
+	//    encoder.SetIndent("", "    ")
+	//    err = encoder.Encode(cfg)
+	jsonData, err := json.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to read file: %w\n", err)
+		panic(err)
 	}
-    defer file.Close()
 
+	var buf bytes.Buffer
 
-	encoder := json.NewEncoder(file)
-    err = encoder.Encode(cfg)
-    if err != nil {
-		return fmt.Errorf("failed toencode data to file: %w\n", err)
-    }
+	err = json.Indent(&buf, jsonData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode data to file: %w\n", err)
+	}
+
+	err = os.WriteFile(jsonPath, jsonData, 0644)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
