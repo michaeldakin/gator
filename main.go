@@ -25,41 +25,13 @@ type State struct {
 	db  *database.Queries
 }
 
-type Commands struct {
-	handlers map[string]func(*State, Command) error
-}
-
-type Command struct {
-	name string
-	args []string
-}
-
-func orError(s string, err error) {
-	if err != nil {
-		logger.Error(s, "error", err)
-		os.Exit(1)
-	}
-}
-
-func newLogger() {
-}
-
 func main() {
-	// Logger
 	slogOpts := &slog.HandlerOptions{
 		AddSource: true,
-		Level:     slog.LevelDebug,
+		Level:     slog.LevelInfo,
 	}
 	logger = slog.New(slog.NewJSONHandler(os.Stdout, slogOpts))
 	slog.SetDefault(logger)
-
-	// Args
-	// minArgs := 2
-	// slog.Debug("args", "min_args", minArgs, "args_provided", len(userArgs))
-	// if len(userArgs) < minArgs {
-	// 	slog.Error("not enough args", "len", len(userArgs), "min_args", minArgs)
-	// 	os.Exit(1)
-	// }
 
 	// Config
 	cfg, err := config.Read()
@@ -68,7 +40,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Postgres DB
+	// Postgres
 	db, err := sql.Open("postgres", cfg.DbUrl)
 	if err != nil {
 		logger.Error("unable to connect to postgres", "error", err)
@@ -81,49 +53,61 @@ func main() {
 		db:  dbQueries,
 	}
 
+	// Command Handlers
 	cmds := Commands{
 		handlers: make(map[string]func(*State, Command) error),
 	}
 
-	userArgs := os.Args
-	userInputCmd := userArgs[1]
-    var userInputParam string
-	if userInputCmd != "users" {
-		userInputParam = userArgs[2]
-	}
-
-	if userInputCmd == "" { // || userInputParam == ""
-		slog.Debug("args error", "len", len(userArgs), "args", userArgs[1:])
-		logger.Error("not enough args provided")
-		os.Exit(1)
-	}
-
-	slog.Debug("args provided.",
-		slog.Group("args",
-			slog.String("cmd", userInputCmd),
-			slog.String("arg", userInputParam),
-		),
-	)
-
-	// Register functions
+	// Register commands
 	err = InitCommands(cmds)
 	if err != nil {
 		logger.Error("InitCommands", "error", err)
 		os.Exit(1)
 	}
 
+	// Handle args
+	userArgs := os.Args
+    if len(userArgs) <= 1 {
+        fmt.Println("Usage: ./gator <command> <arg [optional]>")
+        fmt.Println()
+        fmt.Println("Valid commands:")
+        fmt.Println("   register - register new user")
+        fmt.Println("   login    - login with an existing user")
+        fmt.Println("   users    - display list of registered users")
+        fmt.Println()
+        os.Exit(1)
+    }
+
+	userInputCmd := userArgs[1]
+	var userInputParam string
+
+	if userInputCmd != "users" {
+		userInputParam = userArgs[2]
+	}
+
+	if userInputCmd == "" {
+		logger.Debug("args error", "len", len(userArgs), "args", userArgs[1:])
+		logger.Error("not enough args provided")
+		os.Exit(1)
+	}
+
+	logger.Debug("args provided.",
+		slog.Group("args",
+			slog.String("cmd", userInputCmd),
+			slog.String("arg", userInputParam),
+		),
+	)
+
 	// Handle user input
-	// arg1 - command <login|register>
-	// arg2 - Params <username>
+	// arg1 - Command
+	// arg2 - Params [optional]
 	switch userInputCmd {
 	case "login":
-		// Create Command struct
 		loginCmd := Command{
 			name: userInputCmd,
 			args: []string{userInputParam},
 		}
 
-		// Run the command
 		err := cmds.run(&newState, loginCmd)
 		if err != nil {
 			logger.Error("cmds.run", "error", err)
@@ -136,10 +120,8 @@ func main() {
 			logger.Error("unable to read config", "error", err)
 			os.Exit(1)
 		}
-
-		slog.Info("updated logged in user", "CurrentUserName", cfg.CurrentUserName)
+		logger.Info("updated logged in user", "CurrentUserName", cfg.CurrentUserName)
 	case "register":
-		slog.Info("cmd: register")
 		registerCmd := Command{
 			name: userInputCmd,
 			args: []string{userInputParam},
@@ -151,28 +133,45 @@ func main() {
 			os.Exit(1)
 		}
 	case "users":
-		slog.Info("cmd: list users")
+		listUsersCmd := Command{
+			name: userInputCmd,
+		}
+		err := cmds.run(&newState, listUsersCmd)
+		if err != nil {
+			logger.Error("cmds.run", "error", err)
+			os.Exit(1)
+		}
 	default:
-		logger.Error("invalid argument")
+		logger.Error("invalid command")
 	}
+}
 
+type Command struct {
+	name string
+	args []string
+}
+
+type Commands struct {
+	handlers map[string]func(*State, Command) error
 }
 
 func InitCommands(cmds Commands) error {
-	err := cmds.register("login", loginHandler)
-	if err != nil {
-		return fmt.Errorf("cmds.register error: %v\n", err)
+	for c, h := range cmds.handlers {
+		err := cmds.register(c, h)
+		if err != nil {
+			return fmt.Errorf("cmds.register error: %v\n", err)
+		}
 	}
 
-	err = cmds.register("register", registerHandler)
-	if err != nil {
-		return fmt.Errorf("cmds.register error: %v\n", err)
-	}
-
-	err = cmds.register("users", usersHandler)
-	if err != nil {
-		return fmt.Errorf("cmds.register error: %v\n", err)
-	}
+	// err = cmds.register("register", registerHandler)
+	// if err != nil {
+	// 	return fmt.Errorf("cmds.register error: %v\n", err)
+	// }
+	//
+	// err = cmds.register("users", usersHandler)
+	// if err != nil {
+	// 	return fmt.Errorf("cmds.register error: %v\n", err)
+	// }
 
 	return nil
 }
@@ -184,11 +183,12 @@ func (c *Commands) register(name string, f func(*State, Command) error) error {
 	}
 
 	c.handlers[name] = f
+	logger.Info("registered command", "cmd", c.handlers[name])
 	return nil
 }
 
-// his method runs a given command with the provided state if it exists.
-func (c *Commands) run(s *State, cmd Command) error {
+// This method runs a given command with the provided state if it exists.
+func (c *Commands) run(state *State, cmd Command) error {
 	logger.Debug(
 		"cmd info",
 		slog.Group("args",
@@ -196,24 +196,20 @@ func (c *Commands) run(s *State, cmd Command) error {
 			"cmd.args", cmd.args,
 		),
 	)
-	// _, ok := c.handlers[cmd.name]
-	// if !ok {
-	// 	return errors.New("invalid argument")
-	// }
 
 	switch cmd.name {
 	case "login":
-		err := loginHandler(s, cmd)
+		err := loginHandler(state, cmd)
 		if err != nil {
 			return err
 		}
 	case "register":
-		err := registerHandler(s, cmd)
+		err := registerHandler(state, cmd)
 		if err != nil {
 			return err
 		}
 	case "users":
-		err := usersHandler(s, cmd)
+		err := usersHandler(state, cmd)
 		if err != nil {
 			return err
 		}
@@ -226,13 +222,25 @@ func (c *Commands) run(s *State, cmd Command) error {
 
 // gator login <username>
 func loginHandler(s *State, c Command) error {
-	slog.Debug("cfg output.",
+	logger.Debug("cfg output.",
 		slog.Group("args",
 			"cmd.name", c.name,
 			"cmd.args", c.args,
 		),
 	)
-	err := s.cfg.SetUser(c.args[0])
+
+	ctx := context.Background()
+	cmdParam := c.args[0]
+	userExists, err := s.db.GetUserByName(ctx, cmdParam)
+	if err != nil {
+		return err
+	}
+
+	if userExists.Name == "" {
+		return errors.New("no name was provided!")
+	}
+
+	err = s.cfg.SetUser(c.args[0])
 	if err != nil {
 		return fmt.Errorf("unable to SetUser: %w\n", err)
 	}
@@ -243,6 +251,12 @@ func loginHandler(s *State, c Command) error {
 
 // gator register <username>
 func registerHandler(s *State, c Command) error {
+	logger.Debug("registerHandler output",
+		slog.Group("args",
+			"cmd.name", c.name,
+			"cmd.args", c.args,
+		),
+	)
 	/*
 	 * 1. Confirm arg2 was passed <username>
 	 * 2. Create a new user in the database
@@ -256,7 +270,7 @@ func registerHandler(s *State, c Command) error {
 	 * 4. Print a message that the user was created, and log the user's data to the console for your own debugging.
 	 */
 	ctx := context.Background()
-	cmdParam := c.args[2]
+	cmdParam := c.args[0]
 
 	userParams := database.CreateUserParams{
 		ID:        uuid.New(),
@@ -266,12 +280,13 @@ func registerHandler(s *State, c Command) error {
 	}
 
 	// Check if user already exists, if so return
-	userExists, err := s.db.GetUser(ctx, userParams.ID)
+	_, err := s.db.GetUser(ctx, userParams.ID)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return errors.New("user exists")
+	}
+
 	if err != nil {
 		return err
-	}
-	if userExists.Name != "" {
-		return fmt.Errorf("user %q already exists in database", userExists.Name)
 	}
 
 	newUser, err := s.db.CreateUser(ctx, userParams)
@@ -279,7 +294,12 @@ func registerHandler(s *State, c Command) error {
 		return err
 	}
 
-	fmt.Printf("user created and inserted into DB %+v\n", newUser)
+	err = s.cfg.SetUser(newUser.Name)
+	if err != nil {
+		return err
+	}
+
+	logger.Debug("user created", "name", newUser.Name, "uuid", newUser.ID, "created_at", newUser.CreatedAt, "last_updated", newUser.UpdatedAt)
 
 	return nil
 }
@@ -293,7 +313,7 @@ func usersHandler(s *State, c Command) error {
 	}
 
 	for _, user := range users {
-		fmt.Printf("user: %+v\n", user)
+		fmt.Printf("%+v\n", user)
 	}
 
 	return nil
